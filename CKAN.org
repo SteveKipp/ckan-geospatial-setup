@@ -1,0 +1,233 @@
+** Welcome
+   #+TITLE: Introduction to CKAN
+   #+AUTHOR: Steve Kipp
+   #+EMAIL: skipp@ball.com
+
+** What is CKAN?
+CKAN stands for Comprehesnive Knowledge Archival Network, whcih is alot of words
+for Data Management System. 
+
+CKAN is an open source data management system that is highly extendable,
+provides an amazing API, and lends itself well the geospatial functionality.
+
+** Where is CKAN used?
+The short answer is everywhere. 
+
+But there are definitely some very notable examples of CKAN in the wild.
+The most notable is likely data.gov, this is a great example of how flexible
+CKAN is, and how well is scales.
+
+** How Does CKAN work?
+CKAN under the hood is some languages and frameworks likely many of you have
+run across at some point in time
+- Written primarily in Python
+- Uses Flask as a web framework
+- Uses a Jinja2 templating engine for frontend
+- Frontend UI is CSS/HTML/JS
+- Data is stored in Postgresql at some point in time
+
+
+CKAN is broken down into some major components that will make things easier
+to understand.
+-Datasets are the primary unit in storing data
+-Datasets contain exclusively metainformation for catalogging 
+-Datasets can contain any amount of addtional metainformation
+-Resources are the actual data attached to a dataset, typically the data 
+is not stored on CKAN itself (however it can be if needed!)
+-Resources link out to the actual data to be viewed/retreieved in CKAN
+
+** Cool, lets get a CKAN instance setup!
+Things you'll need
+-Ubuntu 16.04 LTS
+-The end
+
+I'm going to walk through each step with a small explanation
+
+*** Update apt repositories
+#+BEGIN_SRC
+  sudo apt update
+#+END_SRC
+
+*** Install dependencies
+#+BEGIN_SRC
+  sudo apt install -y nginx
+  sudo apt install -y apache2 libapache2-modwsgi libpq5 redis-server git-core
+#+END_SRC
+
+*** Get CKAN, install CKAN
+#+BEGIN_SRC
+  wget http://packaging.ckan.org/python-ckan_2.8-xenial_amd64.deb
+  sudo dpkg -i python-ckan_2.9-xenial_amd64.deb
+#+END_SRC
+
+*** Install and Configure Postgresql
+
+#+BEGIN_SRC
+  sudo apt-get install -y postgresql
+
+  sudo -u postgres psql -l
+
+  #Here we need to create a new postgres user called ckan_default
+  sudo -u postgres createuser -S -D -R -P ckan_default
+
+  #Create a database also called ckan_default owned by the user ckan_default
+  sudo -u postgres createdb -O ckan_default ckan_default -E utf-8
+#+END_SRC
+
+Now we need to update our CKAN configuration file 
+(/etc/ckan/default/production.ini)
+
+and append our postgres info to the SQLAlchemy URL
+
+
+*** Install and configure SOLR
+#+BEGIN_SRC
+  sudo apt-get install -y solr-jetty
+#+END_SRC
+
+We need to edit the Jetty configuration file to have the following options
+(/etc/default/jetty8)
+- NO_START=0
+- JETTY_HOST=127.0.0.1
+- JETTY_PORT=8983
+
+Restart Jetty
+
+#+BEGIN_SRC
+  sudo service jett8 restart
+#+END_SRC
+
+Replace the default SOLR schema with the CKAN schema
+#+BEGIN_SRC
+  sudo mv /etc/solr/conf/schema.xml /etc/solr/conf/schema.xml.bak
+  sudo ln -s /usr/lib/ckan/default/src/ckan/ckan/config/solr/schema.xml /etc/solr/conf/schema.xml
+#+END_SRC
+
+#+BEGIN_SRC
+  sudo service jett8 restart
+#+END_SRC
+
+
+Update the CKAN solr_url in the CKAN config (etc/ckan/default/production.ini)
+
+#+BEGIN_SRC
+  solr_url=http://127.0.0.1:8983/solr
+#+END_SRC
+
+Make the final updates to the ckan config
+#+BEGIN_SRC
+  ckan.site_id = default
+  ckan.site_url = http://locahost
+#+END_SRC
+
+Initialize the Database 
+#+BEGIN_SRC
+  sudo ckan db init
+  sudo service apache2 restart
+  sudo service nginx restart
+#+END_SRC
+
+** Boom Done! 
+
+Wait one more thing, we need to create an admin/super user
+from the ckan directory:
+#+BEGIN_SRC
+ paster --plugin=ckan sysadmin add admin --config=/etc/ckan/default/production.ini
+#+END_SRC
+
+Now navigate to http://locahost 
+
+
+** This is cool, but what about Geospatial?
+CKAN's geospatial functionality relies heavily on 3 extensions
+- ckanext-spatial
+- spatialUI
+- geoview
+
+But before we install all of those, we need to install a postgres extension
+PostGIS
+
+#+BEGIN_SRC
+  sudo apt-get install postgresql-9.5-postgis
+
+  sudo -u postgres psql -d ckan_default -f /usr/share/postgresql/9.5/contrib/postgis-2.2/postgis.sql
+  sudo -u postgres psql -d ckan_default -f /usr/share/postgresql/9.5/contrib/postgis-2.2/spatial_ref_sys.sql
+
+  sudo -u postgres psql -d ckan_default -c 'ALTER TABLE geometry_columns OWNER TO ckan_default;'
+  sudo -u postgres psql -d ckan_default -c 'ALTER TABLE spatial_ref_sys OWNER TO ckan_default;'
+#+END_SRC
+
+Verify that PostGIS was installed
+#+BEGIN_SRC
+ sudo -u postgres psql -d ckan_default -c "SELECT postgis_full_version()"
+#+END_SRC
+
+*** Installing the extensions
+First we have to install some dependencies
+#+BEGIN_SRC
+ sudo apt-get install python-dev libxml2-dev libxslt1-dev libgeos-c1v5
+#+END_SRC
+
+Next we will install ckanext-spatial
+#+BEGIN_SRC
+  . /usr/lib/ckan/default/bin/activate
+  cd /usr/lib 
+
+  sudo chmod 777 -R ckan/
+  pip install -e "git+https://github.com/ckan/ckanext-spatial.git#egg=ckanext-spatial"
+
+  pip install -r /usr/lib/ckan/default/src/ckanext-spatial/pip-requirements.txt
+
+  sudo service apache2 reload
+#+END_SRC
+
+Now that CKAN ckanext-spatial has been installed, like usual we'll need to make
+some adjustments to the CKAN configuration file (/etc/ckan/default/production.ini)
+
+Add to ckan.plugins ckan.plugins = spatial_metadata spatial_query
+Add ckanext.spatial.search_backend = solr
+Add ckan.spatial.srid = 4326
+Add ckanext.spatial.common_map.type = stamen
+
+Lastly we'll need to update the solr schema to allow solr to index spatial data
+#+BEGIN_SRC
+  <field name="bbox_area" type="float" indexed="true" stored="true" />
+  <field name="maxx" type="float" indexed="true" stored="true" />
+  <field name="maxy" type="float" indexed="true" stored="true" />
+  <field name="minx" type="float" indexed="true" stored="true" />
+  <field name="miny" type="float" indexed="true" stored="true" />
+#+END_SRC
+
+and restart apache2 AND jetty
+
+Next we'll add the UI Search component
+#+BEGIN_SRC
+  cd ckan/default/src/
+  git clone https://github.com/XVTSolutions/ckanext-spatialUI
+  cd ckanext-spatialUI
+  python setup.py develop
+
+  #add the extension to CKAN config
+  sudo vim /etc/ckan/default/production.ini
+
+  sudo service apache2 restart 
+#+END_SRC
+
+** Lets test out some Datasets!
+
+** Last but not least installing Geoview
+#+BEGIN_SRC
+  cd ckan/default/src/
+  
+  pip install ckanext-geoview
+  Pip install ckantoolkit
+
+  sudo vim /etc/ckan/default/production.ini
+  #Add resource_proxy geo_view to plugins  
+  #Add geo_view to default views 
+  #Add  ckanext.geoview.ol_viewer.formats = wms
+
+ sudo service apache2 restart
+#+END_SRC
+
+** And last but not least, add and test a WMS!
